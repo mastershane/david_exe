@@ -10,10 +10,10 @@ import {
 } from "~/lib/tournament";
 import { loadConfig, CONFIG_STORAGE_KEY } from "~/lib/config";
 import type { AppConfig } from "~/lib/config";
-import { loadRegistry, recordEventStats } from "~/lib/playerRegistry";
-import type { MatchRecord } from "~/lib/playerRegistry";
-import { loadEvent, saveEvent, deleteEvent, syncEventToServer } from "~/lib/eventStore";
-import type { Phase } from "~/lib/eventStore";
+import { loadRegistry, recordEventStats, addPlayerToRegistry } from "~/lib/playerRegistry";
+import type { MatchRecord, RegisteredPlayer } from "~/lib/playerRegistry";
+import { loadEvent, saveEvent, syncEventToServer } from "~/lib/eventStore";
+import type { Phase, TimerState } from "~/lib/eventStore";
 import { syncRegistryToServer } from "~/lib/playerRegistry";
 
 export function meta() {
@@ -25,13 +25,14 @@ const MAX_PLAYERS = 12;
 
 // ── Match-record builder (for career stats) ───────────────────────────────────
 
+// Returns map keyed by player ID → match records for that player
 function buildMatchRecords(
   players: Player[],
   drafts: Round[][],
   date: string
 ): Map<string, MatchRecord[]> {
   const idToName = new Map(players.map((p) => [p.id, p.name]));
-  const result = new Map<string, MatchRecord[]>(players.map((p) => [p.name, []]));
+  const result = new Map<string, MatchRecord[]>(players.map((p) => [p.id, []]));
 
   drafts.forEach((draft, draftIdx) => {
     draft.forEach((round, roundIdx) => {
@@ -42,7 +43,7 @@ function buildMatchRecords(
         const p1Name = idToName.get(pairing.player1Id)!;
 
         if (pairing.player2Id === null) {
-          result.get(p1Name)?.push({ date, draftNum, roundNum, opponent: "BYE", result: "bye", gameScore: "BYE" });
+          result.get(pairing.player1Id)?.push({ date, draftNum, roundNum, opponent: "BYE", result: "bye", gameScore: "BYE" });
           return;
         }
 
@@ -55,8 +56,8 @@ function buildMatchRecords(
         const p2Result: MatchRecord["result"] =
           pairing.result === "p2" ? "win" : pairing.result === "p1" ? "loss" : "draw";
 
-        result.get(p1Name)?.push({ date, draftNum, roundNum, opponent: p2Name, result: p1Result, gameScore: `${p1Wins}–${p2Wins}${suffix}` });
-        result.get(p2Name)?.push({ date, draftNum, roundNum, opponent: p1Name, result: p2Result, gameScore: `${p2Wins}–${p1Wins}${suffix}` });
+        result.get(pairing.player1Id)?.push({ date, draftNum, roundNum, opponent: p2Name, result: p1Result, gameScore: `${p1Wins}–${p2Wins}${suffix}` });
+        result.get(pairing.player2Id)?.push({ date, draftNum, roundNum, opponent: p1Name, result: p2Result, gameScore: `${p2Wins}–${p1Wins}${suffix}` });
       });
     });
   });
@@ -77,8 +78,11 @@ export default function EventPage() {
   const [name, setName]                     = useState(() => saved?.name ?? "Draft Night");
   const [numDrafts, setNumDrafts]           = useState(() => saved?.numDrafts ?? 4);
   const [roundsPerDraft, setRoundsPerDraft] = useState(() => saved?.roundsPerDraft ?? 3);
-  const [playerCount, setPlayerCount]       = useState(() => saved?.playerCount ?? 8);
-  const [playerNames, setPlayerNames]       = useState<string[]>(() => saved?.playerNames ?? Array(MAX_PLAYERS).fill(""));
+  const [selectedPlayers, setSelectedPlayers] = useState<{ id: string; name: string }[]>(
+    () => saved?.selectedPlayers ?? []
+  );
+  const [search, setSearch] = useState("");
+  const [registry, setRegistry] = useState<RegisteredPlayer[]>(() => loadRegistry());
 
   // ── Event state ───────────────────────────────────────────────────────────
   const [phase, setPhase]                             = useState<Phase>(() => saved?.phase ?? "event-setup");
@@ -87,8 +91,10 @@ export default function EventPage() {
   const [currentDraftIdx, setCurrentDraftIdx]         = useState(() => saved?.currentDraftIdx ?? 0);
   const [currentRoundInDraft, setCurrentRoundInDraft] = useState(() => saved?.currentRoundInDraft ?? 1);
   const [statsRecorded, setStatsRecorded]             = useState(() => saved?.statsRecorded ?? false);
+  const [timer, setTimer]                             = useState<TimerState | null>(() => saved?.timer ?? null);
+  const [confirmEnd, setConfirmEnd]                   = useState(false);
 
-  // Known names for autocomplete (not persisted in event state)
+  // Known names for registry refresh after stats are recorded
   const [knownPlayerNames, setKnownPlayerNames] = useState<string[]>(() =>
     loadRegistry().map((p) => p.name)
   );
@@ -108,24 +114,26 @@ export default function EventPage() {
       createdAt: saved?.createdAt ?? new Date().toISOString(),
       numDrafts,
       roundsPerDraft,
-      playerCount,
-      playerNames,
+      playerCount: selectedPlayers.length,
+      selectedPlayers,
       phase,
       players,
       drafts,
       currentDraftIdx,
       currentRoundInDraft,
       statsRecorded,
+      timer,
     };
     saveEvent(state);
 
     // Debounced server sync — fires 5 s after the last state change.
     // Skip during event-setup (data is still being entered).
+    // Timer changes sync immediately (handled separately in handleTimerUpdate).
     if (phase !== "event-setup") {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
       syncTimerRef.current = setTimeout(() => syncEventToServer(state), 5_000);
     }
-  }, [id, name, numDrafts, roundsPerDraft, playerCount, playerNames, phase, players, drafts, currentDraftIdx, currentRoundInDraft, statsRecorded]);
+  }, [id, name, numDrafts, roundsPerDraft, selectedPlayers, phase, players, drafts, currentDraftIdx, currentRoundInDraft, statsRecorded, timer]);
 
   // ── Sync config when /settings saves ─────────────────────────────────────
   useEffect(() => {
@@ -156,10 +164,11 @@ export default function EventPage() {
     if (phase !== "event-complete" || statsRecorded) return;
 
     const date = new Date().toISOString();
-    const matchesByName = buildMatchRecords(players, drafts, date);
+    const matchesById = buildMatchRecords(players, drafts, date);
 
     recordEventStats(
       standings.map((s) => ({
+        id: s.playerId,
         name: s.name,
         wins: s.wins,
         losses: s.losses,
@@ -168,7 +177,7 @@ export default function EventPage() {
         gameWins: s.gameWins,
         gameLosses: s.gameLosses,
         gameDraws: s.gameDraws,
-        matches: matchesByName.get(s.name) ?? [],
+        matches: matchesById.get(s.playerId) ?? [],
       }))
     );
     const updatedRegistry = loadRegistry();
@@ -191,8 +200,36 @@ export default function EventPage() {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-  function handleNameChange(idx: number, value: string) {
-    setPlayerNames((prev) => prev.map((n, i) => (i === idx ? value : n)));
+
+  function freshTimer(): TimerState {
+    return {
+      durationSeconds: appConfig.roundMinutes * 60,
+      startedAt: null,
+      secondsAtStart: appConfig.roundMinutes * 60,
+      running: false,
+    };
+  }
+
+  // Called by RoundTimer when user presses Start/Pause/Restart.
+  // Syncs immediately so other browsers see the change without waiting 5 s.
+  function handleTimerUpdate(newTimer: TimerState) {
+    setTimer(newTimer);
+    syncEventToServer({
+      id: id!,
+      name,
+      createdAt: saved!.createdAt,
+      numDrafts,
+      roundsPerDraft,
+      playerCount: selectedPlayers.length,
+      selectedPlayers,
+      phase,
+      players,
+      drafts,
+      currentDraftIdx,
+      currentRoundInDraft,
+      statsRecorded,
+      timer: newTimer,
+    });
   }
 
   function makePairings(standingsList: Standing[]) {
@@ -200,12 +237,11 @@ export default function EventPage() {
   }
 
   function startEvent() {
-    const names = playerNames.slice(0, playerCount).map((n) => n.trim());
-    if (names.some((n) => !n)) return;
+    if (selectedPlayers.length < MIN_PLAYERS) return;
 
-    const ps: Player[] = names.map((n, i) => ({ id: `p${i}`, name: n }));
-    const shuffled = [...ps].sort(() => Math.random() - 0.5);
-    const initStandings: Standing[] = shuffled.map((p) => ({
+    // IDs are already stable UUIDs from the registry picker — no lookup needed
+    const ps: Player[] = [...selectedPlayers].sort(() => Math.random() - 0.5);
+    const initStandings: Standing[] = ps.map((p) => ({
       playerId: p.id,
       name: p.name,
       wins: 0, losses: 0, draws: 0, byes: 0, points: 0,
@@ -214,10 +250,12 @@ export default function EventPage() {
       omwPct: 1 / 3, gwPct: 1 / 3, ogwPct: 1 / 3,
     }));
 
+    const initTimer = freshTimer();
     setPlayers(ps);
     setDrafts([[{ number: 1, pairings: makePairings(initStandings) }]]);
     setCurrentDraftIdx(0);
     setCurrentRoundInDraft(1);
+    setTimer(initTimer);
     setPhase("playing");
     // Immediate sync so the new event appears on other devices right away
     syncEventToServer({
@@ -226,14 +264,15 @@ export default function EventPage() {
       createdAt: saved?.createdAt ?? new Date().toISOString(),
       numDrafts,
       roundsPerDraft,
-      playerCount,
-      playerNames,
+      playerCount: selectedPlayers.length,
+      selectedPlayers,
       phase: "playing",
       players: ps,
       drafts: [[{ number: 1, pairings: makePairings(initStandings) }]],
       currentDraftIdx: 0,
       currentRoundInDraft: 1,
       statsRecorded,
+      timer: initTimer,
     });
   }
 
@@ -288,6 +327,7 @@ export default function EventPage() {
         { number: nextRoundNum, pairings: makePairings(standings) },
       ]);
       setCurrentRoundInDraft(nextRoundNum);
+      setTimer(freshTimer());
     } else if (!isLastDraft) {
       setPhase("between-drafts");
     } else {
@@ -303,6 +343,7 @@ export default function EventPage() {
     ]);
     setCurrentDraftIdx(nextIdx);
     setCurrentRoundInDraft(1);
+    setTimer(freshTimer());
     setPhase("playing");
   }
 
@@ -328,16 +369,40 @@ export default function EventPage() {
 
   // ── Event Setup ───────────────────────────────────────────────────────────
   if (phase === "event-setup") {
-    const names = playerNames.slice(0, playerCount);
-    const canStart = names.every((n) => n.trim().length > 0);
-    const recommendedRounds = totalRounds(playerCount);
+    const canStart = selectedPlayers.length >= MIN_PLAYERS && selectedPlayers.length <= MAX_PLAYERS;
+    const recommendedRounds = totalRounds(selectedPlayers.length || MIN_PLAYERS);
+
+    const searchTrimmed = search.trim();
+    const searchLower = searchTrimmed.toLowerCase();
+    const suggestions = registry.filter(
+      (p) =>
+        !selectedPlayers.some((s) => s.id === p.id) &&
+        (searchLower === "" || p.name.toLowerCase().includes(searchLower))
+    );
+    const exactMatchExists = registry.some(
+      (p) => p.name.toLowerCase() === searchLower
+    );
+    const canCreate = searchTrimmed.length > 0 && !exactMatchExists;
+
+    function addToEvent(p: { id: string; name: string }) {
+      if (selectedPlayers.length >= MAX_PLAYERS) return;
+      setSelectedPlayers((prev) => [...prev, { id: p.id, name: p.name }]);
+      setSearch("");
+    }
+
+    function removeFromEvent(id: string) {
+      setSelectedPlayers((prev) => prev.filter((p) => p.id !== id));
+    }
+
+    function createAndAdd() {
+      if (!searchTrimmed) return;
+      const newPlayer = addPlayerToRegistry(searchTrimmed);
+      setRegistry(loadRegistry());
+      addToEvent(newPlayer);
+    }
 
     return (
       <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4">
-        <datalist id="known-players">
-          {knownPlayerNames.map((n) => <option key={n} value={n} />)}
-        </datalist>
-
         <div className="w-full max-w-md">
           <div className="flex items-center justify-between mb-1">
             <h1 className="text-4xl font-mono font-bold text-green-400">david.exe</h1>
@@ -402,41 +467,79 @@ export default function EventPage() {
                 <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">
                   Players
                 </h2>
-                <select
-                  value={playerCount}
-                  onChange={(e) => setPlayerCount(Number(e.target.value))}
-                  className="bg-slate-700 rounded-lg px-2 py-1 text-white text-sm border border-slate-600 focus:outline-none focus:border-green-500"
-                >
-                  {Array.from({ length: MAX_PLAYERS - MIN_PLAYERS + 1 }, (_, i) => i + MIN_PLAYERS).map((n) => (
-                    <option key={n} value={n}>{n} players</option>
+                <span className={`text-xs tabular-nums ${
+                  selectedPlayers.length < MIN_PLAYERS ? "text-slate-500"
+                  : selectedPlayers.length >= MAX_PLAYERS ? "text-yellow-400"
+                  : "text-green-400"
+                }`}>
+                  {selectedPlayers.length} / {MIN_PLAYERS}–{MAX_PLAYERS}
+                </span>
+              </div>
+
+              {/* Selected chips */}
+              {selectedPlayers.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {selectedPlayers.map((p) => (
+                    <span
+                      key={p.id}
+                      className="flex items-center gap-1.5 bg-slate-700 text-white text-sm px-3 py-1 rounded-full"
+                    >
+                      {p.name}
+                      <button
+                        onClick={() => removeFromEvent(p.id)}
+                        className="text-slate-400 hover:text-red-400 transition-colors leading-none"
+                      >
+                        ×
+                      </button>
+                    </span>
                   ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                {Array.from({ length: playerCount }, (_, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-slate-500 w-5 text-right text-sm shrink-0">{i + 1}</span>
-                    <input
-                      type="text"
-                      value={playerNames[i]}
-                      onChange={(e) => handleNameChange(i, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          if (i < playerCount - 1) {
-                            document.getElementById(`player-${i + 1}`)?.focus();
-                          } else if (canStart) {
-                            startEvent();
-                          }
-                        }
-                      }}
-                      id={`player-${i}`}
-                      list="known-players"
-                      placeholder={`Player ${i + 1}`}
-                      className="flex-1 bg-slate-700 rounded-lg px-3 py-2 text-white border border-slate-600 focus:outline-none focus:border-green-500 placeholder-slate-500"
-                    />
-                  </div>
-                ))}
-              </div>
+                </div>
+              )}
+
+              {/* Search / add */}
+              {selectedPlayers.length < MAX_PLAYERS && (
+                <div className="space-y-1">
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (suggestions.length > 0) addToEvent(suggestions[0]);
+                        else if (canCreate) createAndAdd();
+                      }
+                    }}
+                    placeholder="Search players or type a new name…"
+                    className="w-full bg-slate-700 rounded-lg px-3 py-2 text-white border border-slate-600 focus:outline-none focus:border-green-500 placeholder-slate-500 text-sm"
+                  />
+
+                  {(suggestions.length > 0 || canCreate) && (
+                    <div className="bg-slate-700 rounded-lg overflow-hidden divide-y divide-slate-600">
+                      {suggestions.slice(0, 6).map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => addToEvent(p)}
+                          className="w-full text-left px-3 py-2 hover:bg-slate-600 transition-colors flex items-center justify-between"
+                        >
+                          <span className="text-white text-sm">{p.name}</span>
+                          <span className="text-slate-400 text-xs">
+                            {p.eventsPlayed === 0 ? "new" : `${p.eventsPlayed} event${p.eventsPlayed !== 1 ? "s" : ""}`}
+                          </span>
+                        </button>
+                      ))}
+                      {canCreate && (
+                        <button
+                          onClick={createAndAdd}
+                          className="w-full text-left px-3 py-2 hover:bg-slate-600 transition-colors flex items-center gap-2"
+                        >
+                          <span className="text-green-400 text-sm font-medium">+</span>
+                          <span className="text-green-400 text-sm">Create "{searchTrimmed}"</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <button
@@ -444,7 +547,9 @@ export default function EventPage() {
               disabled={!canStart}
               className="w-full bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition-colors"
             >
-              Start Event
+              {canStart
+                ? `Start Event (${selectedPlayers.length} players)`
+                : `Select ${MIN_PLAYERS}–${MAX_PLAYERS} players to start`}
             </button>
           </div>
         </div>
@@ -487,6 +592,33 @@ export default function EventPage() {
           >
             Start Draft {completedDraft + 1}
           </button>
+
+          <div className="flex items-center justify-center gap-3 py-1">
+            {confirmEnd ? (
+              <>
+                <span className="text-xs text-slate-400">End event with current standings?</span>
+                <button
+                  onClick={() => { setPhase("event-complete"); setConfirmEnd(false); }}
+                  className="text-xs font-medium text-red-400 hover:text-red-300 transition-colors"
+                >
+                  Yes, end now
+                </button>
+                <button
+                  onClick={() => setConfirmEnd(false)}
+                  className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmEnd(true)}
+                className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+              >
+                End event early
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -558,10 +690,9 @@ export default function EventPage() {
         </div>
 
         {/* Round Timer */}
-        <RoundTimer
-          roundKey={`${currentDraftIdx}-${currentRoundInDraft}`}
-          durationMinutes={appConfig.roundMinutes}
-        />
+        {timer && (
+          <RoundTimer timer={timer} onUpdate={handleTimerUpdate} />
+        )}
 
         {/* Pairings */}
         <section>
@@ -710,6 +841,34 @@ export default function EventPage() {
         >
           {advanceLabel}
         </button>
+
+        {/* End early */}
+        <div className="flex items-center justify-center gap-3 py-1">
+          {confirmEnd ? (
+            <>
+              <span className="text-xs text-slate-400">End event with current standings?</span>
+              <button
+                onClick={() => { setPhase("event-complete"); setConfirmEnd(false); }}
+                className="text-xs font-medium text-red-400 hover:text-red-300 transition-colors"
+              >
+                Yes, end now
+              </button>
+              <button
+                onClick={() => setConfirmEnd(false)}
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setConfirmEnd(true)}
+              className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+            >
+              End event early
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -717,42 +876,53 @@ export default function EventPage() {
 
 // ── RoundTimer ────────────────────────────────────────────────────────────────
 
-function RoundTimer({ roundKey, durationMinutes }: { roundKey: string; durationMinutes: number }) {
-  const totalSeconds = durationMinutes * 60;
-  const [secondsLeft, setSecondsLeft] = useState(totalSeconds);
-  const [running, setRunning] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+function calcSecondsLeft(t: TimerState): number {
+  if (!t.running || !t.startedAt) return t.secondsAtStart;
+  const elapsed = Math.floor((Date.now() - new Date(t.startedAt).getTime()) / 1000);
+  return Math.max(0, t.secondsAtStart - elapsed);
+}
 
-  useEffect(() => {
-    setRunning(false);
-    setSecondsLeft(durationMinutes * 60);
-  }, [roundKey, durationMinutes]);
+function RoundTimer({
+  timer,
+  onUpdate,
+}: {
+  timer: TimerState;
+  onUpdate: (t: TimerState) => void;
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(() => calcSecondsLeft(timer));
 
+  // Re-sync display when timer state changes from outside (other browser, refresh)
   useEffect(() => {
-    if (running) {
-      intervalRef.current = setInterval(() => {
-        setSecondsLeft((prev) => {
-          if (prev <= 1) { setRunning(false); return 0; }
-          return prev - 1;
-        });
-      }, 1000);
+    setSecondsLeft(calcSecondsLeft(timer));
+  }, [timer]);
+
+  // Tick when running
+  useEffect(() => {
+    if (!timer.running) return;
+    const interval = setInterval(() => setSecondsLeft(calcSecondsLeft(timer)), 500);
+    return () => clearInterval(interval);
+  }, [timer.running, timer.startedAt, timer.secondsAtStart]);
+
+  function handleToggle() {
+    const sl = calcSecondsLeft(timer);
+    if (timer.running) {
+      onUpdate({ ...timer, running: false, startedAt: null, secondsAtStart: sl });
+    } else {
+      if (sl <= 0) return;
+      onUpdate({ ...timer, running: true, startedAt: new Date().toISOString(), secondsAtStart: sl });
     }
-    return () => {
-      if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-    };
-  }, [running]);
-
-  function restart() {
-    setRunning(false);
-    setSecondsLeft(totalSeconds);
   }
 
+  function handleRestart() {
+    onUpdate({ ...timer, running: false, startedAt: null, secondsAtStart: timer.durationSeconds });
+  }
+
+  const expired  = secondsLeft <= 0;
+  const critical = !expired && secondsLeft < 2 * 60;
+  const low      = !expired && !critical && secondsLeft < 5 * 60;
   const mins = Math.floor(secondsLeft / 60);
   const secs = secondsLeft % 60;
   const display = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-  const expired  = secondsLeft === 0;
-  const critical = !expired && secondsLeft < 2 * 60;
-  const low      = !expired && !critical && secondsLeft < 5 * 60;
 
   return (
     <div className="bg-slate-800 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
@@ -765,20 +935,20 @@ function RoundTimer({ roundKey, durationMinutes }: { roundKey: string; durationM
         {expired && (
           <span className="text-xs font-semibold bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">TIME</span>
         )}
-        {!expired && !running && secondsLeft < totalSeconds && (
+        {!expired && !timer.running && secondsLeft < timer.durationSeconds && (
           <span className="text-xs text-slate-500">paused</span>
         )}
       </div>
       <div className="flex gap-2 shrink-0">
         <button
-          onClick={() => setRunning((r) => !r)}
+          onClick={handleToggle}
           disabled={expired}
           className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
         >
-          {running ? "Pause" : "Start"}
+          {timer.running ? "Pause" : "Start"}
         </button>
         <button
-          onClick={restart}
+          onClick={handleRestart}
           className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
         >
           Restart

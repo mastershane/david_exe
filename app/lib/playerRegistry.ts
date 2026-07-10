@@ -10,6 +10,7 @@ export interface MatchRecord {
 }
 
 export interface RegisteredPlayer {
+  id: string;         // stable UUID — primary key
   name: string;
   eventsPlayed: number;
   matchWins: number;
@@ -26,7 +27,19 @@ export function loadRegistry(): RegisteredPlayer[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(REGISTRY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const players = JSON.parse(raw) as Array<Partial<RegisteredPlayer> & { name: string }>;
+    // Migration: add stable IDs to any existing entries that lack them
+    let needsSave = false;
+    const migrated = players.map((p) => {
+      if (!p.id) {
+        needsSave = true;
+        return { ...p, id: crypto.randomUUID() } as RegisteredPlayer;
+      }
+      return p as RegisteredPlayer;
+    });
+    if (needsSave) saveRegistry(migrated);
+    return migrated;
   } catch {
     return [];
   }
@@ -39,6 +52,7 @@ export function saveRegistry(players: RegisteredPlayer[]): void {
 /** Merge one completed event's standings into the persistent registry. */
 export function recordEventStats(
   standings: Array<{
+    id: string;
     name: string;
     wins: number;
     losses: number;
@@ -51,10 +65,11 @@ export function recordEventStats(
   }>
 ): void {
   const registry = loadRegistry();
-  const map = new Map(registry.map((p) => [p.name, { ...p }]));
+  const map = new Map(registry.map((p) => [p.id, { ...p }]));
 
   for (const s of standings) {
-    const existing = map.get(s.name) ?? {
+    const existing = map.get(s.id) ?? {
+      id: s.id,
       name: s.name,
       eventsPlayed: 0,
       matchWins: 0,
@@ -66,8 +81,10 @@ export function recordEventStats(
       gameDraws: 0,
       matches: [],
     };
-    map.set(s.name, {
+    map.set(s.id, {
       ...existing,
+      id: s.id,
+      name: s.name,
       eventsPlayed: existing.eventsPlayed + 1,
       matchWins:   existing.matchWins   + s.wins,
       matchLosses: existing.matchLosses + s.losses,
@@ -81,6 +98,26 @@ export function recordEventStats(
   }
 
   saveRegistry([...map.values()].sort((a, b) => a.name.localeCompare(b.name)));
+}
+
+/** Create a new player in the registry and return them. Always generates a new UUID. */
+export function addPlayerToRegistry(name: string): RegisteredPlayer {
+  const newPlayer: RegisteredPlayer = {
+    id: crypto.randomUUID(),
+    name: name.trim(),
+    eventsPlayed: 0,
+    matchWins: 0,
+    matchLosses: 0,
+    matchDraws: 0,
+    matchPoints: 0,
+    gameWins: 0,
+    gameLosses: 0,
+    gameDraws: 0,
+    matches: [],
+  };
+  const registry = loadRegistry();
+  saveRegistry([...registry, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
+  return newPlayer;
 }
 
 // ── Server sync ───────────────────────────────────────────────────────────────

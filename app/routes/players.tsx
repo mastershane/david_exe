@@ -183,7 +183,7 @@ export default function Players() {
                         <td className="px-4 py-3 text-slate-500 text-center">{i + 1}</td>
                         <td className="px-4 py-3 font-medium">
                           <Link
-                            to={`/players/${encodeURIComponent(p.name)}`}
+                            to={`/players/${p.id}`}
                             className="text-white hover:text-green-400 transition-colors"
                           >
                             {p.name}

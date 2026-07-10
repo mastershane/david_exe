@@ -189,11 +189,11 @@ function EventCard({
     return `Draft ${event.currentDraftIdx + 1} of ${event.numDrafts} · Round ${event.currentRoundInDraft} of ${event.roundsPerDraft}`;
   })();
 
-  // Comma-separated player list (prefer locked-in players over pre-filled names)
+  // Comma-separated player list
   const playerLine =
     event.players.length > 0
       ? event.players.map((p) => p.name).join(", ")
-      : event.playerNames.filter(Boolean).join(", ");
+      : (event.selectedPlayers ?? []).map((p) => p.name).join(", ");
 
   const createdDate = new Date(event.createdAt).toLocaleDateString("en-US", {
     month: "short",

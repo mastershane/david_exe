@@ -13,6 +13,13 @@ export function eventStorageKey(id: string): string {
 
 export type Phase = "event-setup" | "playing" | "between-drafts" | "event-complete";
 
+export interface TimerState {
+  durationSeconds: number;    // total round duration
+  startedAt: string | null;   // ISO timestamp when timer last started; null = paused
+  secondsAtStart: number;     // seconds remaining when last started or paused
+  running: boolean;
+}
+
 export interface EventState {
   id: string;
   name: string;
@@ -20,16 +27,15 @@ export interface EventState {
   numDrafts: number;
   roundsPerDraft: number;
   playerCount: number;
-  playerNames: string[];
+  selectedPlayers: { id: string; name: string }[]; // replaces playerNames
   phase: Phase;
   players: Player[];
   drafts: Round[][];
   currentDraftIdx: number;
   currentRoundInDraft: number;
   statsRecorded: boolean;
+  timer: TimerState | null;
 }
-
-const MAX_PLAYERS = 12;
 
 function defaultEventState(id: string, name: string): EventState {
   return {
@@ -38,14 +44,15 @@ function defaultEventState(id: string, name: string): EventState {
     createdAt: new Date().toISOString(),
     numDrafts: 4,
     roundsPerDraft: 3,
-    playerCount: 8,
-    playerNames: Array(MAX_PLAYERS).fill(""),
+    playerCount: 0,
+    selectedPlayers: [],
     phase: "event-setup",
     players: [],
     drafts: [],
     currentDraftIdx: 0,
     currentRoundInDraft: 1,
     statsRecorded: false,
+    timer: null,
   };
 }
 
@@ -169,12 +176,12 @@ export function migrateLegacyEvent(): void {
   if (!raw) return;
 
   try {
-    const old = JSON.parse(raw) as Partial<EventState> & { phase?: Phase };
+    const old = JSON.parse(raw) as Partial<EventState> & { phase?: Phase; playerNames?: string[] };
     // Only migrate if the event had actually been started (players entered)
     const hasPlayers =
       Array.isArray(old.players) && old.players.length > 0;
     const hasNames =
-      Array.isArray(old.playerNames) && old.playerNames.some((n) => n);
+      Array.isArray(old.playerNames) && old.playerNames.some((n: string) => n);
 
     if (!hasPlayers && !hasNames) {
       localStorage.removeItem(LEGACY_STATE_KEY);
@@ -189,14 +196,15 @@ export function migrateLegacyEvent(): void {
         createdAt: new Date().toISOString(),
         numDrafts: old.numDrafts ?? 4,
         roundsPerDraft: old.roundsPerDraft ?? 3,
-        playerCount: old.playerCount ?? 8,
-        playerNames: old.playerNames ?? Array(MAX_PLAYERS).fill(""),
+        playerCount: old.playerCount ?? 0,
+        selectedPlayers: (old as { selectedPlayers?: { id: string; name: string }[] }).selectedPlayers ?? [],
         phase: old.phase ?? "event-setup",
         players: old.players ?? [],
         drafts: old.drafts ?? [],
         currentDraftIdx: old.currentDraftIdx ?? 0,
         currentRoundInDraft: old.currentRoundInDraft ?? 1,
         statsRecorded: old.statsRecorded ?? false,
+        timer: old.timer ?? null,
       };
       const ids = loadEventIds();
       if (!ids.includes(id)) persistIds([...ids, id]); // legacy at end

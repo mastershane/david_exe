@@ -4,7 +4,7 @@ export default [
   index("routes/home.tsx"),
   route("event/:id", "routes/event.$id.tsx"),
   route("players", "routes/players.tsx"),
-  route("players/:name", "routes/players.$name.tsx"),
+  route("players/:id", "routes/players.$id.tsx"),
   route("info", "routes/info.tsx"),
   route("settings", "routes/settings.tsx"),
   // API resource routes (no UI)
