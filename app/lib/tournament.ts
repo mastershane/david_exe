@@ -63,6 +63,28 @@ export function computeMatchResult(games: GameOutcome[]): MatchResult {
 
 const FLOOR = 1 / 3; // 33.33% — WotC minimum for all percentage tiebreakers
 
+// ── Tiebreaker configuration ──────────────────────────────────────────────────
+
+export type TiebreakerKey = "omwPct" | "gwPct" | "ogwPct";
+
+export const TIEBREAKER_META: Record<TiebreakerKey, { label: string; description: string }> = {
+  omwPct: { label: "Opponent Match Win %", description: "Average match-win rate of your opponents (floor 33⅓%)" },
+  gwPct:  { label: "Game Win %",           description: "Your personal game-win percentage (floor 33⅓%)" },
+  ogwPct: { label: "Opponent Game Win %",  description: "Average game-win rate of your opponents (floor 33⅓%)" },
+};
+
+export const ALL_TIEBREAKER_KEYS: TiebreakerKey[] = ["omwPct", "gwPct", "ogwPct"];
+
+export interface TiebreakerConfig {
+  /** Enabled tiebreakers in priority order. Points always leads; name always trails. */
+  order: TiebreakerKey[];
+}
+
+export const DEFAULT_TIEBREAKER_CONFIG: TiebreakerConfig = {
+  order: ["omwPct", "gwPct", "ogwPct"],
+};
+
+
 function rawMwPct(s: Standing): number {
   const total = s.wins + s.losses + s.draws;
   return total === 0 ? FLOOR : Math.max(FLOOR, s.wins / total);
@@ -73,7 +95,11 @@ function rawGwPct(s: Standing): number {
   return total === 0 ? FLOOR : Math.max(FLOOR, s.gameWins / total);
 }
 
-export function computeStandings(players: Player[], rounds: Round[]): Standing[] {
+export function computeStandings(
+  players: Player[],
+  rounds: Round[],
+  config: TiebreakerConfig = DEFAULT_TIEBREAKER_CONFIG,
+): Standing[] {
   const map = new Map<string, Standing>();
   for (const p of players) {
     map.set(p.id, {
@@ -137,10 +163,10 @@ export function computeStandings(players: Player[], rounds: Round[]): Standing[]
   }
 
   return [...map.values()].sort((a, b) => {
-    if (b.points    !== a.points)    return b.points    - a.points;
-    if (b.omwPct    !== a.omwPct)    return b.omwPct    - a.omwPct;
-    if (b.gwPct     !== a.gwPct)     return b.gwPct     - a.gwPct;
-    if (b.ogwPct    !== a.ogwPct)    return b.ogwPct    - a.ogwPct;
+    if (b.points !== a.points) return b.points - a.points;
+    for (const key of config.order) {
+      if (b[key] !== a[key]) return b[key] - a[key];
+    }
     return a.name.localeCompare(b.name);
   });
 }

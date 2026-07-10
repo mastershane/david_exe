@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router";
-import { loadRegistry, winRate, gameWinRate } from "~/lib/playerRegistry";
+import { loadRegistry, fetchAndMergeRegistryFromServer, winRate, gameWinRate } from "~/lib/playerRegistry";
 import type { RegisteredPlayer } from "~/lib/playerRegistry";
 
 export function meta() {
@@ -46,6 +46,10 @@ export default function Players() {
   );
   const [sortKey, setSortKey] = useState<SortKey>("winRate");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  useEffect(() => {
+    fetchAndMergeRegistryFromServer().then(setPlayers);
+  }, []);
 
   function handleSort(key: SortKey) {
     if (key === sortKey) {

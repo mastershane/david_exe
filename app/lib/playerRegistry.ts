@@ -83,6 +83,38 @@ export function recordEventStats(
   saveRegistry([...map.values()].sort((a, b) => a.name.localeCompare(b.name)));
 }
 
+// ── Server sync ───────────────────────────────────────────────────────────────
+
+/** Fetch the registry from the server and merge into localStorage.
+ *  Server data wins; silent fallback to localStorage on failure. */
+export async function fetchAndMergeRegistryFromServer(): Promise<RegisteredPlayer[]> {
+  try {
+    const res = await fetch("/api/registry");
+    if (!res.ok) return loadRegistry();
+    const serverPlayers = (await res.json()) as RegisteredPlayer[];
+    if (serverPlayers.length > 0) {
+      saveRegistry(serverPlayers);
+    }
+    return serverPlayers.length > 0 ? serverPlayers : loadRegistry();
+  } catch {
+    return loadRegistry();
+  }
+}
+
+/** Push the current local registry to the server. */
+export async function syncRegistryToServer(players?: RegisteredPlayer[]): Promise<void> {
+  const data = players ?? loadRegistry();
+  try {
+    await fetch("/api/registry", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  } catch {
+    // Offline
+  }
+}
+
 export function winRate(p: RegisteredPlayer): number {
   const total = p.matchWins + p.matchLosses + p.matchDraws;
   return total === 0 ? 0 : p.matchWins / total;

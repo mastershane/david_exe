@@ -1,5 +1,8 @@
 .DS_Store
 .env
+*.db
+*.db-shm
+*.db-wal
 /node_modules/
 
 # React Router
