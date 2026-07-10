@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Link } from "react-router";
 import { ALL_TIEBREAKER_KEYS, TIEBREAKER_META } from "~/lib/tournament";
 import type { TiebreakerKey } from "~/lib/tournament";
@@ -93,7 +93,7 @@ export default function Settings() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4">
+    <div className="min-h-screen text-white p-4">
       <div className="max-w-lg mx-auto space-y-6">
 
         {/* Header */}

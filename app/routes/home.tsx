@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   loadAllEvents,
@@ -48,7 +48,7 @@ export default function Home() {
     fetchAndMergeFromServer().then(setEvents);
   }, []);
 
-  if (!hasMounted) return <div className="min-h-screen bg-slate-900" />;
+  if (!hasMounted) return <div className="min-h-screen" />;
 
   function handleNewEvent() {
     const event = createEvent();
@@ -71,7 +71,7 @@ export default function Home() {
   const complete = events.filter((e) => e.phase === "event-complete");
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4">
+    <div className="min-h-screen text-white p-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
         {/* Header */}

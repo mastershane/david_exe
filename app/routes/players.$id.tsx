@@ -105,7 +105,7 @@ export default function PlayerDetail() {
 
   if (!player) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4">
+      <div className="min-h-screen text-white flex items-center justify-center p-4">
         <div className="text-center space-y-3">
           <p className="text-slate-400 text-lg">Player not found.</p>
           <Link to="/players" className="text-green-400 hover:underline text-sm">
@@ -122,7 +122,7 @@ export default function PlayerDetail() {
   const events = groupByEvent(player.matches ?? []);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4">
+    <div className="min-h-screen text-white p-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
         {/* Header */}

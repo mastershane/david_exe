@@ -1,4 +1,4 @@
-import { Link } from "react-router";
+﻿import { Link } from "react-router";
 
 export function meta() {
   return [{ title: "david.exe — How It Works" }];
@@ -28,7 +28,7 @@ function Divider() {
 
 export default function Info() {
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4">
+    <div className="min-h-screen text-white p-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
         {/* Header */}

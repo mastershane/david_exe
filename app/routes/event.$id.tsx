@@ -196,7 +196,7 @@ export default function EventPage() {
   }, [hasMounted, saved, navigate]);
 
   if (!hasMounted || !saved) {
-    return <div className="min-h-screen bg-slate-900" />;
+    return <div className="min-h-screen" />;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -402,7 +402,7 @@ export default function EventPage() {
     }
 
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4">
+      <div className="min-h-screen text-white flex items-center justify-center p-4">
         <div className="w-full max-w-md">
           <div className="flex items-center justify-between mb-1">
             <h1 className="text-4xl font-mono font-bold text-green-400">david.exe</h1>
@@ -563,7 +563,7 @@ export default function EventPage() {
     const medals = ["🥇", "🥈", "🥉"];
 
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4">
+      <div className="min-h-screen text-white flex items-center justify-center p-4">
         <div className="w-full max-w-lg">
           <h1 className="text-4xl font-mono font-bold text-center mb-1 text-green-400">
             {name}
@@ -629,7 +629,7 @@ export default function EventPage() {
     const medals = ["🥇", "🥈", "🥉"];
 
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4">
+      <div className="min-h-screen text-white flex items-center justify-center p-4">
         <div className="w-full max-w-lg">
           <h1 className="text-4xl font-mono font-bold text-center mb-1 text-green-400">
             {name}
@@ -670,7 +670,7 @@ export default function EventPage() {
     : "Enter all results to continue";
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4">
+    <div className="min-h-screen text-white p-4">
       <div className="max-w-2xl mx-auto space-y-6">
 
         {/* Header */}

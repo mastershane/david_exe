@@ -33,6 +33,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
+        {/* Fixed background image with dark overlay */}
+        <div className="fixed inset-0 -z-10">
+          <div
+            className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+            style={{ backgroundImage: "url('/bg.jpeg')" }}
+          />
+          <div className="absolute inset-0 bg-slate-900/80" />
+        </div>
         {children}
         <ScrollRestoration />
         <Scripts />

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Link } from "react-router";
 import { loadRegistry, fetchAndMergeRegistryFromServer, winRate, gameWinRate } from "~/lib/playerRegistry";
 import type { RegisteredPlayer } from "~/lib/playerRegistry";
@@ -93,7 +93,7 @@ export default function Players() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-4">
+    <div className="min-h-screen text-white p-4">
       <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
