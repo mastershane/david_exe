@@ -65,6 +65,41 @@ function buildMatchRecords(
   return result;
 }
 
+// ── Pairing swap ─────────────────────────────────────────────────────────────
+
+function swapInPairings(
+  pairings: Round["pairings"],
+  idA: string,
+  idB: string
+): Round["pairings"] {
+  let pairingOfA = -1, slotOfA: "p1" | "p2" = "p1";
+  let pairingOfB = -1, slotOfB: "p1" | "p2" = "p1";
+
+  for (let i = 0; i < pairings.length; i++) {
+    const p = pairings[i];
+    if (p.player1Id === idA) { pairingOfA = i; slotOfA = "p1"; }
+    else if (p.player2Id === idA) { pairingOfA = i; slotOfA = "p2"; }
+    if (p.player1Id === idB) { pairingOfB = i; slotOfB = "p1"; }
+    else if (p.player2Id === idB) { pairingOfB = i; slotOfB = "p2"; }
+  }
+
+  if (pairingOfA === -1 || pairingOfB === -1 || pairingOfA === pairingOfB) return pairings;
+
+  return pairings.map((p, i) => {
+    if (i !== pairingOfA && i !== pairingOfB) return p;
+    let updated = { ...p };
+    if (i === pairingOfA) {
+      if (slotOfA === "p1") updated = { ...updated, player1Id: idB };
+      else updated = { ...updated, player2Id: idB };
+    }
+    if (i === pairingOfB) {
+      if (slotOfB === "p1") updated = { ...updated, player1Id: idA };
+      else updated = { ...updated, player2Id: idA };
+    }
+    return { ...updated, games: [], result: "pending" as const, timedOut: false };
+  });
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function EventPage() {
@@ -93,6 +128,8 @@ export default function EventPage() {
   const [statsRecorded, setStatsRecorded]             = useState(() => saved?.statsRecorded ?? false);
   const [timer, setTimer]                             = useState<TimerState | null>(() => saved?.timer ?? null);
   const [confirmEnd, setConfirmEnd]                   = useState(false);
+  const [editingPairings, setEditingPairings]         = useState(false);
+  const [selectedForSwap, setSelectedForSwap]         = useState<string | null>(null);
 
   // Known names for registry refresh after stats are recorded
   const [knownPlayerNames, setKnownPlayerNames] = useState<string[]>(() =>
@@ -317,6 +354,22 @@ export default function EventPage() {
       const newGames = p.games.slice(0, -1);
       return { ...p, games: newGames, result: computeMatchResult(newGames) };
     });
+  }
+
+  function handleSelectForSwap(playerId: string) {
+    if (!selectedForSwap) {
+      setSelectedForSwap(playerId);
+      return;
+    }
+    if (selectedForSwap === playerId) {
+      setSelectedForSwap(null);
+      return;
+    }
+    updateCurrentRound((round) => ({
+      ...round,
+      pairings: swapInPairings(round.pairings, selectedForSwap, playerId),
+    }));
+    setSelectedForSwap(null);
   }
 
   function advanceRound() {
@@ -696,13 +749,73 @@ export default function EventPage() {
 
         {/* Pairings */}
         <section>
-          <h2 className="text-base font-semibold text-slate-300 uppercase tracking-wider mb-3">
-            Pairings — Best of 3
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold text-slate-300 uppercase tracking-wider">
+              Pairings — Best of 3
+            </h2>
+            <button
+              onClick={() => { setEditingPairings((v) => !v); setSelectedForSwap(null); }}
+              className={`text-xs font-medium px-3 py-1 rounded-lg transition-colors ${
+                editingPairings
+                  ? "bg-green-600 text-white hover:bg-green-500"
+                  : "text-slate-400 hover:text-white hover:bg-slate-700"
+              }`}
+            >
+              {editingPairings ? "Done" : "Edit pairings"}
+            </button>
+          </div>
+
+          {editingPairings && (
+            <p className="text-xs text-slate-500 mb-3">
+              {selectedForSwap
+                ? "Now tap another player to swap with them."
+                : "Tap a player to select, then tap who to swap them with. Swapped matches reset to 0–0."}
+            </p>
+          )}
+
           <div className="space-y-3">
             {currentRound?.pairings.map((pairing) => {
               const p1 = playerMap.get(pairing.player1Id)!;
               const isBye = pairing.player2Id === null;
+
+              if (editingPairings) {
+                const p2 = isBye ? null : playerMap.get(pairing.player2Id!)!;
+                return (
+                  <div key={pairing.id} className="bg-slate-800 rounded-xl px-5 py-4 flex items-center gap-3">
+                    <button
+                      onClick={() => handleSelectForSwap(pairing.player1Id)}
+                      className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                        selectedForSwap === pairing.player1Id
+                          ? "bg-green-600 text-white ring-2 ring-green-400"
+                          : selectedForSwap
+                          ? "bg-slate-700 text-white hover:bg-slate-600 ring-1 ring-slate-500"
+                          : "bg-slate-700 text-white hover:bg-slate-600"
+                      }`}
+                    >
+                      {p1.name}
+                    </button>
+                    {isBye ? (
+                      <span className="text-xs text-slate-500 px-2 shrink-0">BYE</span>
+                    ) : (
+                      <>
+                        <span className="text-slate-600 text-sm shrink-0">vs</span>
+                        <button
+                          onClick={() => handleSelectForSwap(pairing.player2Id!)}
+                          className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                            selectedForSwap === pairing.player2Id
+                              ? "bg-green-600 text-white ring-2 ring-green-400"
+                              : selectedForSwap
+                              ? "bg-slate-700 text-white hover:bg-slate-600 ring-1 ring-slate-500"
+                              : "bg-slate-700 text-white hover:bg-slate-600"
+                          }`}
+                        >
+                          {p2!.name}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              }
 
               if (isBye) {
                 return (
