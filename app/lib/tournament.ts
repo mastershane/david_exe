@@ -4,6 +4,7 @@ export type GameOutcome = "p1" | "p2" | "draw";
 export interface Player {
   id: string;
   name: string;
+  dropped?: boolean;
 }
 
 export interface Pairing {

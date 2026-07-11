@@ -130,6 +130,9 @@ export default function EventPage() {
   const [confirmEnd, setConfirmEnd]                   = useState(false);
   const [editingPairings, setEditingPairings]         = useState(false);
   const [selectedForSwap, setSelectedForSwap]         = useState<string | null>(null);
+  const [confirmDrop, setConfirmDrop]                 = useState<string | null>(null);
+  const [draftPairings, setDraftPairings]             = useState<Round["pairings"] | null>(null);
+  const [draftDropped, setDraftDropped]               = useState<Set<string>>(new Set());
 
   // Known names for registry refresh after stats are recorded
   const [knownPlayerNames, setKnownPlayerNames] = useState<string[]>(() =>
@@ -189,7 +192,17 @@ export default function EventPage() {
   );
   const currentDraftRounds = drafts[currentDraftIdx] ?? [];
   const currentRound = currentDraftRounds[currentRoundInDraft - 1];
-  const allResultsIn = currentRound?.pairings.every((p) => p.result !== "pending") ?? false;
+  const droppedPlayerIds = useMemo(
+    () => new Set(players.filter((p) => p.dropped).map((p) => p.id)),
+    [players]
+  );
+  const allResultsIn = (currentRound?.pairings ?? [])
+    .filter(
+      (p) =>
+        !droppedPlayerIds.has(p.player1Id) &&
+        (p.player2Id === null || !droppedPlayerIds.has(p.player2Id))
+    )
+    .every((p) => p.result !== "pending");
   const isLastRoundInDraft = currentRoundInDraft === roundsPerDraft;
   const isLastDraft = currentDraftIdx === numDrafts - 1;
   const playerMap = useMemo(() => new Map(players.map((p) => [p.id, p])), [players]);
@@ -270,7 +283,8 @@ export default function EventPage() {
   }
 
   function makePairings(standingsList: Standing[]) {
-    return createPairings(standingsList);
+    const droppedIds = new Set(players.filter((p) => p.dropped).map((p) => p.id));
+    return createPairings(standingsList.filter((s) => !droppedIds.has(s.playerId)));
   }
 
   function startEvent() {
@@ -356,6 +370,35 @@ export default function EventPage() {
     });
   }
 
+  function enterEditMode() {
+    if (!currentRound) return;
+    setDraftPairings([...currentRound.pairings]);
+    setDraftDropped(new Set(players.filter((p) => p.dropped).map((p) => p.id)));
+    setSelectedForSwap(null);
+    setConfirmDrop(null);
+    setEditingPairings(true);
+  }
+
+  function commitEdits() {
+    if (draftPairings) {
+      updateCurrentRound((round) => ({ ...round, pairings: draftPairings }));
+    }
+    setPlayers((prev) =>
+      prev.map((p) => ({ ...p, dropped: draftDropped.has(p.id) }))
+    );
+    setEditingPairings(false);
+    setDraftPairings(null);
+    setSelectedForSwap(null);
+    setConfirmDrop(null);
+  }
+
+  function cancelEdits() {
+    setEditingPairings(false);
+    setDraftPairings(null);
+    setSelectedForSwap(null);
+    setConfirmDrop(null);
+  }
+
   function handleSelectForSwap(playerId: string) {
     if (!selectedForSwap) {
       setSelectedForSwap(playerId);
@@ -365,11 +408,39 @@ export default function EventPage() {
       setSelectedForSwap(null);
       return;
     }
-    updateCurrentRound((round) => ({
-      ...round,
-      pairings: swapInPairings(round.pairings, selectedForSwap, playerId),
-    }));
+    const first = selectedForSwap;
     setSelectedForSwap(null);
+    setDraftPairings((prev) => (prev ? swapInPairings(prev, first, playerId) : prev));
+  }
+
+  function handleSkipRound(playerId: string) {
+    setSelectedForSwap(null);
+    setDraftPairings((prev) => {
+      if (!prev) return prev;
+      const pairing = prev.find(
+        (p) => p.player1Id === playerId || p.player2Id === playerId
+      );
+      if (!pairing) return prev;
+      const isP1 = pairing.player1Id === playerId;
+      const opponentId = isP1 ? pairing.player2Id : pairing.player1Id;
+      const remaining = prev.filter((p) => p.id !== pairing.id);
+      if (opponentId !== null) {
+        remaining.push({
+          id: `bye-${opponentId}`,
+          player1Id: opponentId,
+          player2Id: null,
+          games: [],
+          result: "p1",
+          timedOut: false,
+        });
+      }
+      return remaining;
+    });
+  }
+
+  function handleDropPlayer(playerId: string) {
+    handleSkipRound(playerId);
+    setDraftDropped((prev) => new Set([...prev, playerId]));
   }
 
   function advanceRound() {
@@ -753,16 +824,29 @@ export default function EventPage() {
             <h2 className="text-base font-semibold text-slate-300 uppercase tracking-wider">
               Pairings — Best of 3
             </h2>
-            <button
-              onClick={() => { setEditingPairings((v) => !v); setSelectedForSwap(null); }}
-              className={`text-xs font-medium px-3 py-1 rounded-lg transition-colors ${
-                editingPairings
-                  ? "bg-green-600 text-white hover:bg-green-500"
-                  : "text-slate-400 hover:text-white hover:bg-slate-700"
-              }`}
-            >
-              {editingPairings ? "Done" : "Edit pairings"}
-            </button>
+            {editingPairings ? (
+              <div className="flex gap-2">
+                <button
+                  onClick={cancelEdits}
+                  className="text-xs font-medium px-3 py-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={commitEdits}
+                  className="text-xs font-medium px-3 py-1 rounded-lg bg-green-600 text-white hover:bg-green-500 transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={enterEditMode}
+                className="text-xs font-medium px-3 py-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+              >
+                Edit pairings
+              </button>
+            )}
           </div>
 
           {editingPairings && (
@@ -774,43 +858,71 @@ export default function EventPage() {
           )}
 
           <div className="space-y-3">
-            {currentRound?.pairings.map((pairing) => {
+            {(editingPairings ? draftPairings ?? [] : currentRound?.pairings ?? []).map((pairing) => {
               const p1 = playerMap.get(pairing.player1Id)!;
               const isBye = pairing.player2Id === null;
 
               if (editingPairings) {
                 const p2 = isBye ? null : playerMap.get(pairing.player2Id!)!;
-                return (
-                  <div key={pairing.id} className="bg-slate-800 rounded-xl px-5 py-4 flex items-center gap-3">
+
+                const playerSlot = (pid: string, pname: string) => (
+                  <div className="flex-1 space-y-1.5">
                     <button
-                      onClick={() => handleSelectForSwap(pairing.player1Id)}
-                      className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                        selectedForSwap === pairing.player1Id
+                      onClick={() => { setConfirmDrop(null); handleSelectForSwap(pid); }}
+                      className={`w-full py-2 rounded-lg text-sm font-semibold transition-colors ${
+                        selectedForSwap === pid
                           ? "bg-green-600 text-white ring-2 ring-green-400"
                           : selectedForSwap
                           ? "bg-slate-700 text-white hover:bg-slate-600 ring-1 ring-slate-500"
                           : "bg-slate-700 text-white hover:bg-slate-600"
                       }`}
                     >
-                      {p1.name}
+                      {pname}
                     </button>
+                    {confirmDrop === pid ? (
+                      <div className="flex items-center gap-1.5 px-0.5">
+                        <span className="text-xs text-slate-400">Drop permanently?</span>
+                        <button
+                          onClick={() => { handleDropPlayer(pid); setConfirmDrop(null); }}
+                          className="text-xs font-medium text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          onClick={() => setConfirmDrop(null)}
+                          className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2 px-0.5">
+                        <button
+                          onClick={() => handleSkipRound(pid)}
+                          className="flex-1 py-1 text-xs text-slate-400 hover:text-yellow-400 hover:bg-yellow-400/10 rounded transition-colors"
+                        >
+                          Skip round
+                        </button>
+                        <button
+                          onClick={() => setConfirmDrop(pid)}
+                          className="flex-1 py-1 text-xs text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded transition-colors"
+                        >
+                          Drop
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+
+                return (
+                  <div key={pairing.id} className="bg-slate-800 rounded-xl px-4 py-3 flex items-start gap-3">
+                    {playerSlot(pairing.player1Id, p1.name)}
                     {isBye ? (
-                      <span className="text-xs text-slate-500 px-2 shrink-0">BYE</span>
+                      <span className="text-xs text-slate-500 px-2 pt-2.5 shrink-0">BYE</span>
                     ) : (
                       <>
-                        <span className="text-slate-600 text-sm shrink-0">vs</span>
-                        <button
-                          onClick={() => handleSelectForSwap(pairing.player2Id!)}
-                          className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                            selectedForSwap === pairing.player2Id
-                              ? "bg-green-600 text-white ring-2 ring-green-400"
-                              : selectedForSwap
-                              ? "bg-slate-700 text-white hover:bg-slate-600 ring-1 ring-slate-500"
-                              : "bg-slate-700 text-white hover:bg-slate-600"
-                          }`}
-                        >
-                          {p2!.name}
-                        </button>
+                        <span className="text-slate-600 text-sm shrink-0 pt-2.5">vs</span>
+                        {playerSlot(pairing.player2Id!, p2!.name)}
                       </>
                     )}
                   </div>
@@ -942,7 +1054,10 @@ export default function EventPage() {
             Overall Standings
           </h2>
           <div className="bg-slate-800 rounded-xl overflow-hidden">
-            <StandingsTable standings={standings} />
+            <StandingsTable
+              standings={standings}
+              droppedIds={new Set(players.filter((p) => p.dropped).map((p) => p.id))}
+            />
           </div>
         </section>
 
@@ -1003,6 +1118,7 @@ function RoundTimer({
   onUpdate: (t: TimerState) => void;
 }) {
   const [secondsLeft, setSecondsLeft] = useState(() => calcSecondsLeft(timer));
+  const [fullscreen, setFullscreen] = useState(false);
 
   // Re-sync display when timer state changes from outside (other browser, refresh)
   useEffect(() => {
@@ -1015,6 +1131,16 @@ function RoundTimer({
     const interval = setInterval(() => setSecondsLeft(calcSecondsLeft(timer)), 500);
     return () => clearInterval(interval);
   }, [timer.running, timer.startedAt, timer.secondsAtStart]);
+
+  // Close fullscreen on Escape
+  useEffect(() => {
+    if (!fullscreen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setFullscreen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
 
   function handleToggle() {
     const sl = calcSecondsLeft(timer);
@@ -1033,41 +1159,87 @@ function RoundTimer({
   const expired  = secondsLeft <= 0;
   const critical = !expired && secondsLeft < 2 * 60;
   const low      = !expired && !critical && secondsLeft < 5 * 60;
+  const timeColor = expired ? "text-red-500" : critical ? "text-red-400" : low ? "text-yellow-400" : "text-white";
   const mins = Math.floor(secondsLeft / 60);
   const secs = secondsLeft % 60;
   const display = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 
-  return (
-    <div className="bg-slate-800 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <span className={`text-3xl font-mono font-bold tabular-nums ${
-          expired ? "text-red-500" : critical ? "text-red-400" : low ? "text-yellow-400" : "text-white"
-        }`}>
-          {display}
-        </span>
-        {expired && (
-          <span className="text-xs font-semibold bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">TIME</span>
-        )}
-        {!expired && !timer.running && secondsLeft < timer.durationSeconds && (
-          <span className="text-xs text-slate-500">paused</span>
-        )}
-      </div>
-      <div className="flex gap-2 shrink-0">
-        <button
-          onClick={handleToggle}
-          disabled={expired}
-          className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
-        >
-          {timer.running ? "Pause" : "Start"}
-        </button>
-        <button
-          onClick={handleRestart}
-          className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-        >
-          Restart
-        </button>
-      </div>
+  const controls = (large: boolean) => (
+    <div className={`flex gap-3 ${large ? "mt-10" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <button
+        onClick={handleToggle}
+        disabled={expired}
+        className={`rounded-xl font-semibold bg-slate-700 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors ${
+          large ? "px-10 py-4 text-2xl" : "px-3 py-1.5 text-sm"
+        }`}
+      >
+        {timer.running ? "Pause" : "Start"}
+      </button>
+      <button
+        onClick={handleRestart}
+        className={`rounded-xl font-semibold bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors ${
+          large ? "px-10 py-4 text-2xl" : "px-3 py-1.5 text-sm"
+        }`}
+      >
+        Restart
+      </button>
     </div>
+  );
+
+  return (
+    <>
+      {/* Inline timer card */}
+      <div className="bg-slate-800 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
+        <div
+          className="flex items-center gap-3 cursor-pointer select-none"
+          onClick={() => setFullscreen(true)}
+          title="Click to expand"
+        >
+          <span className={`text-3xl font-mono font-bold tabular-nums ${timeColor}`}>
+            {display}
+          </span>
+          {expired && (
+            <span className="text-xs font-semibold bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">TIME</span>
+          )}
+          {!expired && !timer.running && secondsLeft < timer.durationSeconds && (
+            <span className="text-xs text-slate-500">paused</span>
+          )}
+        </div>
+        <div className="flex gap-2 shrink-0">
+          {controls(false)}
+        </div>
+      </div>
+
+      {/* Fullscreen overlay */}
+      {fullscreen && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-900/95 backdrop-blur-sm cursor-pointer"
+          onClick={() => setFullscreen(false)}
+        >
+          <div className="text-center" onClick={(e) => e.stopPropagation()}>
+            <div className={`font-mono font-bold tabular-nums leading-none select-none ${timeColor}`}
+                 style={{ fontSize: "clamp(6rem, 25vw, 18rem)" }}>
+              {display}
+            </div>
+            {expired && (
+              <div className="mt-4 text-3xl font-bold text-red-400 tracking-widest uppercase">
+                Time's Up
+              </div>
+            )}
+            {!expired && !timer.running && secondsLeft < timer.durationSeconds && (
+              <div className="mt-4 text-xl text-slate-500">paused</div>
+            )}
+          </div>
+          {controls(true)}
+          <button
+            className="absolute top-5 right-6 text-slate-600 hover:text-slate-300 text-sm transition-colors"
+            onClick={() => setFullscreen(false)}
+          >
+            ✕ close
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1080,9 +1252,11 @@ function pct(n: number) {
 function StandingsTable({
   standings,
   medals,
+  droppedIds,
 }: {
   standings: Standing[];
   medals?: string[];
+  droppedIds?: Set<string>;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -1101,29 +1275,37 @@ function StandingsTable({
           </tr>
         </thead>
         <tbody>
-          {standings.map((s, i) => (
-            <tr
-              key={s.playerId}
-              className={`border-t border-slate-700 ${
-                medals && i === 0 ? "text-yellow-400"
-                : medals && i === 1 ? "text-slate-300"
-                : medals && i === 2 ? "text-amber-600"
-                : "text-slate-400"
-              }`}
-            >
-              <td className="px-3 py-2.5 text-center font-bold">
-                {medals ? (medals[i] ?? i + 1) : i + 1}
-              </td>
-              <td className="px-3 py-2.5 font-medium">{s.name}</td>
-              <td className="px-2 py-2.5 text-center text-green-400 font-medium">{s.wins}</td>
-              <td className="px-2 py-2.5 text-center text-red-400 font-medium">{s.losses}</td>
-              <td className="px-2 py-2.5 text-center text-yellow-400 font-medium">{s.draws}</td>
-              <td className="px-2 py-2.5 text-center font-bold">{s.points}</td>
-              <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{pct(s.omwPct)}</td>
-              <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{pct(s.gwPct)}</td>
-              <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">{pct(s.ogwPct)}</td>
-            </tr>
-          ))}
+          {standings.map((s, i) => {
+            const dropped = droppedIds?.has(s.playerId) ?? false;
+            return (
+              <tr
+                key={s.playerId}
+                className={`border-t border-slate-700 ${dropped ? "opacity-40" :
+                  medals && i === 0 ? "text-yellow-400"
+                  : medals && i === 1 ? "text-slate-300"
+                  : medals && i === 2 ? "text-amber-600"
+                  : "text-slate-400"
+                }`}
+              >
+                <td className="px-3 py-2.5 text-center font-bold">
+                  {medals ? (medals[i] ?? i + 1) : i + 1}
+                </td>
+                <td className="px-3 py-2.5 font-medium">
+                  <span>{s.name}</span>
+                  {dropped && (
+                    <span className="ml-2 text-xs text-red-400 font-normal">dropped</span>
+                  )}
+                </td>
+                <td className="px-2 py-2.5 text-center text-green-400 font-medium">{s.wins}</td>
+                <td className="px-2 py-2.5 text-center text-red-400 font-medium">{s.losses}</td>
+                <td className="px-2 py-2.5 text-center text-yellow-400 font-medium">{s.draws}</td>
+                <td className="px-2 py-2.5 text-center font-bold">{s.points}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{pct(s.omwPct)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{pct(s.gwPct)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">{pct(s.ogwPct)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
