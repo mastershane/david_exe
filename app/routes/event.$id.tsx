@@ -131,6 +131,7 @@ export default function EventPage() {
   const [editingPairings, setEditingPairings]         = useState(false);
   const [selectedForSwap, setSelectedForSwap]         = useState<string | null>(null);
   const [confirmDrop, setConfirmDrop]                 = useState<string | null>(null);
+  const [expandedNotes, setExpandedNotes]             = useState<Set<string>>(new Set());
   const [draftPairings, setDraftPairings]             = useState<Round["pairings"] | null>(null);
   const [draftDropped, setDraftDropped]               = useState<Set<string>>(new Set());
 
@@ -282,6 +283,29 @@ export default function EventPage() {
     });
   }
 
+  // Immediately syncs so that navigating to the home page and back doesn't
+  // restore stale server state before the 5-second debounce fires.
+  function endEventNow() {
+    setPhase("event-complete");
+    setConfirmEnd(false);
+    syncEventToServer({
+      id: id!,
+      name,
+      createdAt: saved!.createdAt,
+      numDrafts,
+      roundsPerDraft,
+      playerCount: selectedPlayers.length,
+      selectedPlayers,
+      phase: "event-complete",
+      players,
+      drafts,
+      currentDraftIdx,
+      currentRoundInDraft,
+      statsRecorded,
+      timer,
+    });
+  }
+
   function makePairings(standingsList: Standing[]) {
     const droppedIds = new Set(players.filter((p) => p.dropped).map((p) => p.id));
     return createPairings(standingsList.filter((s) => !droppedIds.has(s.playerId)));
@@ -359,6 +383,18 @@ export default function EventPage() {
       const p1Wins = p.games.filter((g) => g === "p1").length;
       const p2Wins = p.games.filter((g) => g === "p2").length;
       return { ...p, timedOut: true, result: timeoutResult(p1Wins, p2Wins) };
+    });
+  }
+
+  function updatePairingNotes(pairingId: string, notes: string) {
+    updatePairing(pairingId, (p) => ({ ...p, notes: notes || undefined }));
+  }
+
+  function toggleNotes(pairingId: string) {
+    setExpandedNotes((prev) => {
+      const next = new Set(prev);
+      next.has(pairingId) ? next.delete(pairingId) : next.add(pairingId);
+      return next;
     });
   }
 
@@ -485,6 +521,7 @@ export default function EventPage() {
       >
         ← Events
       </button>
+      <Link to={`/event/${id}/details`} className="hover:text-slate-200 transition-colors">Details ↗</Link>
       <Link to="/players" className="hover:text-slate-200 transition-colors">Players ↗</Link>
       <Link to="/settings" className="hover:text-slate-200 transition-colors">Settings ↗</Link>
       <Link to="/info" className="hover:text-slate-200 transition-colors">Info ↗</Link>
@@ -722,7 +759,7 @@ export default function EventPage() {
               <>
                 <span className="text-xs text-slate-400">End event with current standings?</span>
                 <button
-                  onClick={() => { setPhase("event-complete"); setConfirmEnd(false); }}
+                  onClick={endEventNow}
                   className="text-xs font-medium text-red-400 hover:text-red-300 transition-colors"
                 >
                   Yes, end now
@@ -751,6 +788,14 @@ export default function EventPage() {
   // ── Event Complete ────────────────────────────────────────────────────────
   if (phase === "event-complete") {
     const medals = ["🥇", "🥈", "🥉"];
+    const finishedRounds = drafts.reduce(
+      (sum, draft) =>
+        sum + draft.filter((r) => r.pairings.every((p) => p.result !== "pending")).length,
+      0
+    );
+    const finishedDrafts = drafts.filter(
+      (draft) => draft.length > 0 && draft.every((r) => r.pairings.every((p) => p.result !== "pending"))
+    ).length;
 
     return (
       <div className="min-h-screen text-white flex items-center justify-center p-4">
@@ -760,7 +805,10 @@ export default function EventPage() {
           </h1>
           <p className="text-2xl text-center text-white mb-1 font-semibold">Event Complete!</p>
           <p className="text-slate-500 text-center text-sm mb-1">
-            {numDrafts} draft{numDrafts !== 1 ? "s" : ""} · {totalRoundsInEvent} rounds
+            {finishedDrafts} draft{finishedDrafts !== 1 ? "s" : ""} · {finishedRounds} round{finishedRounds !== 1 ? "s" : ""}
+            {(finishedDrafts < numDrafts || finishedRounds < totalRoundsInEvent) && (
+              <span className="text-slate-600"> of {numDrafts} · {totalRoundsInEvent}</span>
+            )}
           </p>
           <div className="flex justify-center mb-6">
             <NavLinks size="xs" />
@@ -1042,6 +1090,36 @@ export default function EventPage() {
                       {pairing.timedOut ? "undo time call" : "undo last game"}
                     </button>
                   )}
+
+                  {/* Match notes */}
+                  {expandedNotes.has(pairing.id) ? (
+                    <div className="space-y-1">
+                      <textarea
+                        autoFocus
+                        value={pairing.notes ?? ""}
+                        onChange={(e) => updatePairingNotes(pairing.id, e.target.value)}
+                        placeholder="Add a note about this match…"
+                        rows={2}
+                        className="w-full bg-slate-700 text-slate-200 placeholder-slate-500 text-xs rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-slate-500"
+                      />
+                      <button
+                        onClick={() => toggleNotes(pairing.id)}
+                        className="text-xs text-slate-600 hover:text-slate-400 transition-colors"
+                      >
+                        collapse
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => toggleNotes(pairing.id)}
+                      className="w-full text-left text-xs transition-colors"
+                    >
+                      {pairing.notes
+                        ? <span className="text-slate-400 italic">"{pairing.notes}"</span>
+                        : <span className="text-slate-700 hover:text-slate-500">+ add note</span>
+                      }
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -1076,7 +1154,7 @@ export default function EventPage() {
             <>
               <span className="text-xs text-slate-400">End event with current standings?</span>
               <button
-                onClick={() => { setPhase("event-complete"); setConfirmEnd(false); }}
+                onClick={endEventNow}
                 className="text-xs font-medium text-red-400 hover:text-red-300 transition-colors"
               >
                 Yes, end now

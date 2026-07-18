@@ -14,6 +14,7 @@ export interface Pairing {
   games: GameOutcome[]; // individual game results, max 3
   result: MatchResult; // computed from games
   timedOut: boolean; // match ended due to time
+  notes?: string; // optional match commentary
 }
 
 // Result when time is called based on current game wins
